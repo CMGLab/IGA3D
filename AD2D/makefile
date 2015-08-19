@@ -1,7 +1,7 @@
 include ${PETSC_DIR}/lib/petsc/conf/variables
 LAPACKE_LIB=-llapacke -llapack -lblas
 LIBS = ${PETSC_KSP_LIB} ${LAPACKE_LIB}
-PETSC_INC=-I${PETSC_DIR}include -I${PETSC_DIR}${PETSC_ARCH}/include
+PETSC_INC=-I${PETSC_DIR}/include -I${PETSC_DIR}/${PETSC_ARCH}/include
 INC = ${PETSC_INC}
 
 all: AD2D.exe

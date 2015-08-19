@@ -62,7 +62,7 @@ double Get_Local_Value(double vi[], double basis[], int nloc);
 void Solve_Fine_Scales(ASG_Element element, BC_Struct elementBC, Prob_Params probParams, double*** fullBasis, double*** fullBasisFine, double*** fullBoundaryBasis, double*** fullBoundaryBasisFine, int n_q, double* quadWts, int pf, double* d, double* d_f);
 void Extract_Concentration(ASG_Element* mesh, double*** fullBasis, int numElems, double* plotPts, int numPlotPts, double* d, double* X, double* Y, double* U);
 void Extract_Fine_Scales(double*** fullBasisFine, int numElems, int numPlotPts, int pf, double* d, double* U);
-void Subelement_Connectivity(int* subConnectivity, int p);
+void Subelement_Connectivity(int* subConnectivity, int numPlotPts, int numSubElems);
 void Write_VTK_File(double* X, double* Y, double* U, double* U_f, int numElems, int numPlotPts, int* subConnectivity, int numSubElems);
 
 int main() {
@@ -131,7 +131,7 @@ int main() {
 	// Extract Bezier control points and weights
 	Extract_Geometry(mesh,dim,numElems);
 
-	/* test code to look at geometry assignments
+	/*test code to look at geometry assignments
 	for (int i=0; i<numElems; i++) {
 		cout << "Element " << i+1 << endl;
 		cout << "Nloc = " << mesh[i].nloc << endl;
@@ -157,7 +157,7 @@ int main() {
 		for (int k=0; k<mesh[i].nloc; k++)
 			cout << mesh[i].weights[k] << ", ";
 		cout << endl << "---------------------" << endl;
-	} */
+	}*/
 
 	/* test code to look at Bezier control points and weights assignments
 	for (int i=0; i<numElems; i++) {
@@ -223,8 +223,8 @@ int main() {
 	double*** fullBoundaryBasis;
 	fullBoundaryBasis = new double** [mesh[0].nloc];
 	for (int i=0; i<mesh[0].nloc; i++) {
-		fullBoundaryBasis[i] = new double* [6];
-		for (int j=0; j<6; j++)
+		fullBoundaryBasis[i] = new double* [3];
+		for (int j=0; j<3; j++)
 			fullBoundaryBasis[i][j] = new double [numQ*4];
 	}
 	Boundary_Bernstein_Basis_and_Derivs(fullBoundaryBasis,mesh[0].nloc,mesh[0].p[0],numQ,1,quadPts);
@@ -326,6 +326,34 @@ int main() {
 
 	VecGetValues(d,numNodes,indices,ctrVars);
 
+	/* Write out K to a file
+	double* Kvals;
+	Kvals = new double [numNodes*numNodes];
+	MatGetValues(K,numNodes,indices,numNodes,indices,Kvals);
+	ofstream outStream;
+	outStream.open("test/stiffness.csv");
+	for (int i=0; i<numNodes; i++) {
+		for (int j=0; j<numNodes; j++)
+			outStream << Kvals[i*numNodes+j] << ",";
+		outStream << "\n";
+	}*/
+
+	/* Write out F to a file
+	double* Fvals;
+	Fvals = new double [numNodes];
+	VecGetValues(F,numNodes,indices,Fvals);
+	ofstream outStream2;
+	outStream2.open("test/forcing.csv");
+	for (int i=0; i<numNodes; i++)
+		outStream2 << Fvals[i] << "\n";
+	*/
+
+	// Free memory
+	MatDestroy(&K);
+	VecDestroy(&F);
+	VecDestroy(&d);
+	KSPDestroy(&ksp);
+
 	// Create variables to hold fine scale solution
 	double d_f[(pf+1)*(pf+1)];
 	double ctrVarsFine[numElems*(pf+1)*(pf+1)];
@@ -354,7 +382,7 @@ int main() {
 	delete[] fullBasisFine;
 
 	for (int i=0; i<mesh[0].nloc; i++) {
-		for (int j=0; j<6; j++)
+		for (int j=0; j<3; j++)
 			delete [] fullBoundaryBasis[i][j];
 		delete[] fullBoundaryBasis[i];
 	}
@@ -371,9 +399,12 @@ int main() {
 
 	// Determine plot points on parent element
 	// Assumes same polynomial degree for each element
-	// TODO: Add ability to sub-divide parent element further
-	int numPlotPts = mesh[0].p[0]+1;
-	double interval = 1.0/((double) numPlotPts-1.0);
+	// TODO: Let user specify refinement
+	int numRefine = 2;
+	int numIntervals = mesh[0].p[0]*pow(2,numRefine);
+	int numPlotPts = numIntervals+1;
+	int numSubElems = numIntervals*numIntervals;
+	double interval = 1.0/((double) numIntervals);
 	double plotPts[numPlotPts];
 	for (int i=0; i<numPlotPts; i++)
 		plotPts[i] = i*interval;
@@ -404,15 +435,15 @@ int main() {
 	double U_f[numPlotPts*numPlotPts*numElems];
 
 	// Define subelement connectivity array
-	int subConnectivity[4*mesh[0].p[0]*mesh[0].p[0]];
-	Subelement_Connectivity(subConnectivity,mesh[0].p[0]);
+	int subConnectivity[4*numSubElems];
+	Subelement_Connectivity(subConnectivity,numPlotPts,numSubElems);
 
 	// Extract the solution
 	Extract_Concentration(mesh,plotBasis,numElems,plotPts,numPlotPts,ctrVars,X,Y,U);
 	Extract_Fine_Scales(plotBasisFine,numElems,numPlotPts,pf,ctrVarsFine,U_f);
 
 	// Write solution to file
-	Write_VTK_File(X,Y,U,U_f,numElems,numPlotPts,subConnectivity,mesh[0].p[0]*mesh[0].p[0]);
+	Write_VTK_File(X,Y,U,U_f,numElems,numPlotPts,subConnectivity,numSubElems);
 
 	// Free variables
 	for (int i=0; i<mesh[0].nloc; i++) {
@@ -428,6 +459,31 @@ int main() {
 		delete[] plotBasisFine[i];
 	}
 	delete[] plotBasisFine;
+
+	for (int i=0; i<numElems; i++) {
+		delete[] mesh[i].p;
+		delete[] mesh[i].points;
+		delete[] mesh[i].weights;
+		delete[] mesh[i].bezierPoints;
+		delete[] mesh[i].bezierWeights;
+		delete[] mesh[i].extraction;
+		delete[] mesh[i].connectivity;
+	}
+	delete[] mesh;
+
+	for (int i=0; i<numElems; i++) {
+		delete[] boundaryConditions[i].Neumann;
+		delete[] boundaryConditions[i].h;
+		delete[] boundaryConditions[i].Robin;
+		delete[] boundaryConditions[i].beta;
+	}
+
+	for (int i=0; i<numElems; i++) {
+		delete[] probParams[i].kappa;
+		delete[] probParams[i].kappaArt;
+		delete[] probParams[i].f;
+		delete[] probParams[i].u;
+	}
 
 	PetscFinalize();
 	return 0;
@@ -565,29 +621,29 @@ void Read_BC_File(BC_Struct* boundaryConditions, int* BC, double* g, int numNode
 
 	// Extract Neumann array
 	inStream >> temp;
-	for (int i=0; i<4; i++) {
-		for (int j=0; j<numElems; j++)
+	for (int i=0; i<numElems; i++) {
+		for (int j=0; j<4; j++)
 			inStream >> boundaryConditions[i].Neumann[j];
 	}
 
 	// Extract h array
 	inStream >> temp;
-	for (int i=0; i<4; i++) {
-		for (int j=0; j<numElems; j++)
+	for (int i=0; i<numElems; i++) {
+		for (int j=0; j<4; j++)
 			inStream >> boundaryConditions[i].h[j];
 	}
 
 	// Extract Robin array
 	inStream >> temp;
-	for (int i=0; i<4; i++) {
-		for (int j=0; j<numElems; j++)
+	for (int i=0; i<numElems; i++) {
+		for (int j=0; j<4; j++)
 			inStream >> boundaryConditions[i].Robin[j];
 	}
 
 	// Extract beta array
 	inStream >> temp;
-	for (int i=0; i<4; i++) {
-		for (int j=0; j<numElems; j++)
+	for (int i=0; i<numElems; i++) {
+		for (int j=0; j<4; j++)
 			inStream >> boundaryConditions[i].beta[j];
 	}
 
@@ -678,16 +734,16 @@ void Extract_Geometry(ASG_Element* mesh, int dim, int numElems) {
 
 	int nloc;
 
-	// Create array to hold control points and weights in projected space
-	double projPts[nloc*(dim+1)];
-
-	// Create array to hold Bezier control points and weights in projected space
-	double bezPts[nloc*(dim+1)];
-
 	// Loop through elements
 	for (int i=0; i<numElems; i++) {
 
 		nloc = mesh[i].nloc;
+
+		// Create array to hold control points and weights in projected space
+		double projPts[nloc*(dim+1)];
+
+		// Create array to hold Bezier control points and weights in projected space
+		double bezPts[nloc*(dim+1)];
 
 		// Multiply points by weights
 		for (int j=0; j<nloc; j++) {
@@ -848,12 +904,12 @@ void Bernstein_Basis_and_Derivs(double** B, int p1, int p2, double xi_1, double 
 
 	double** N;
 	N = new double* [n+1];
-	for (int i=0; i<=n; i++)
+	for (int i=0; i<n+1; i++)
 		N[i] = new double [p1+1];
 
 	double** M;
 	M = new double* [n+1];
-	for (int i=0; i<=n; i++)
+	for (int i=0; i<n+1; i++)
 		M[i] = new double [p2+1];
 
 	Bernstein_Basis_and_Deriv(N,p1,xi_1,n);
@@ -880,11 +936,11 @@ void Bernstein_Basis_and_Derivs(double** B, int p1, int p2, double xi_1, double 
 	}
 
 	// Free variables
-	for (int i=0; i<=n; i++)
+	for (int i=0; i<n+1; i++)
 		delete[] N[i];
 	delete[] N;
 
-	for (int i=0; i<=n; i++)
+	for (int i=0; i<n+1; i++)
 		delete[] M[i];
 	delete[] M;
 
@@ -900,8 +956,8 @@ void Full_Bernstein_Basis_and_Derivs(double*** fullBasis, int nloc, int p, int n
 
 	// Create variable to hold Bernstein basis and derivatives at a given point
 	double** B;
-	B = new double* [(p+1)*(p+1)];
-	for (int i=0; i<(p+1)*(p+1); i++)
+	B = new double* [nloc];
+	for (int i=0; i<nloc; i++)
 		B[i] = new double [numFuncts];
 
 	// Loop through quadrature points and calculate Bernstein basis and derivatives at each point
@@ -918,7 +974,7 @@ void Full_Bernstein_Basis_and_Derivs(double*** fullBasis, int nloc, int p, int n
 	}
 
 	// Free variables
-	for (int i=0; i<(p+1)*(p+1); i++)
+	for (int i=0; i<nloc; i++)
 		delete[]  B[i];
 	delete[] B;
 
@@ -935,8 +991,8 @@ void Boundary_Bernstein_Basis_and_Derivs(double*** fullBasis, int nloc, int p, i
 
 	// Create variable to hold Bernstein basis and derivatives at a given point
 	double** B;
-	B = new double* [(p+1)*(p+1)];
-	for (int i=0; i<(p+1)*(p+1); i++)
+	B = new double* [nloc];
+	for (int i=0; i<nloc; i++)
 		B[i] = new double [numFuncts];
 
 	// Loop through boundaries and calculate Bernstein basis and derivatives at each point along each boundary
@@ -975,7 +1031,7 @@ void Boundary_Bernstein_Basis_and_Derivs(double*** fullBasis, int nloc, int p, i
 	}
 
 	// Free variables
-	for (int i=0; i<(p+1)*(p+1); i++)
+	for (int i=0; i<nloc; i++)
 		delete[] B[i];
 	delete[] B;
 
@@ -996,7 +1052,7 @@ void ShapeFunction(ASG_Element element, double** basis, double* R, double** dRdx
 	x[0] = 0;
 	x[1] = 0;
 
-	double wb;
+	double wb = 0;
 	double dwbdxi[2] = {0, 0};
 	double dRdxi[n_loc][2];
 	for (int i=0; i<n_loc; i++) {
@@ -1043,25 +1099,13 @@ void ShapeFunction(ASG_Element element, double** basis, double* R, double** dRdx
 			d2Rdxi2[i][j] = 0;
 	}
 
-	double d2xdxi2[n_loc][3];
-	for (int i=0; i<n_loc; i++) {
+	double d2xdxi2[2][3];
+	for (int i=0; i<2; i++) {
 		for (int j=0; j<3; j++)
 			d2xdxi2[i][j] = 0;
 	}
 
-	int indices[n_loc];
-	for (int i=0; i<n_loc; i++)
-		indices[i] = i;
-
 	double bp[n_loc][2];
-
-	int ptIndices[2];
-	ptIndices[0] = 0;
-	ptIndices[1] = 1;
-
-	int ind[3];
-	for (int j=0; j<3; j++)
-		ind[j] = j;
 
 	for (int i=0; i<n_loc; i++) {
 		for (int j=0; j<2; j++)
@@ -1097,8 +1141,8 @@ void ShapeFunction(ASG_Element element, double** basis, double* R, double** dRdx
 
 			if (flag == 1) {
 				d2Rdxi2[a][0] += element.weights[a]*C_operators[a][b]*((d2Bdxi2[b][0]/wb - dBdxi[b][0]*dwbdxi[0]/(wb*wb)) - (dwbdxi[0]*(dBdxi[b][0]/(wb*wb) - 2*dwbdxi[0]*B[b]/(wb*wb*wb)) + d2wbdxi2[0]*B[b]/(wb*wb)));
-				d2Rdxi2[a][1] += element.weights[a]*C_operators[a][b]*((d2Bdxi2[b][1]/wb - dBdxi[b][1]*dwbdxi[1]/(wb*wb)) - (dwbdxi[1]*(dBdxi[b][1]/(wb*wb) - 2*dwbdxi[1]*B[b]/(wb*wb*wb)) + d2wbdxi2[1]*B[b]/(wb*wb)));
-				d2Rdxi2[a][2] += element.weights[a]*C_operators[a][b]*((d2Bdxi2[b][2]/wb - dBdxi[b][2]*dwbdxi[2]/(wb*wb)) - (dwbdxi[2]*(dBdxi[b][2]/(wb*wb) - 2*dwbdxi[2]*B[b]/(wb*wb*wb)) + d2wbdxi2[2]*B[b]/(wb*wb)));
+				d2Rdxi2[a][1] += element.weights[a]*C_operators[a][b]*((d2Bdxi2[b][1]/wb - dBdxi[b][0]*dwbdxi[1]/(wb*wb)) - (dwbdxi[0]*(dBdxi[b][1]/(wb*wb) - 2*dwbdxi[1]*B[b]/(wb*wb*wb)) + d2wbdxi2[1]*B[b]/(wb*wb)));
+				d2Rdxi2[a][2] += element.weights[a]*C_operators[a][b]*((d2Bdxi2[b][2]/wb - dBdxi[b][1]*dwbdxi[1]/(wb*wb)) - (dwbdxi[1]*(dBdxi[b][1]/(wb*wb) - 2*dwbdxi[1]*B[b]/(wb*wb*wb)) + d2wbdxi2[2]*B[b]/(wb*wb)));
 			}
 		}
 	}
@@ -1115,8 +1159,8 @@ void ShapeFunction(ASG_Element element, double** basis, double* R, double** dRdx
 		if (flag == 1) {
 			for (int i=0; i<2; i++) {
 				d2xdxi2[i][0] += element.bezierWeights[a]*bp[a][i]*((d2Bdxi2[a][0]/wb - dBdxi[a][0]*dwbdxi[0]/(wb*wb)) - (dwbdxi[0]*(dBdxi[a][0]/(wb*wb) - 2*dwbdxi[0]*B[a]/(wb*wb*wb)) + d2wbdxi2[0]*B[a]/(wb*wb)));
-				d2xdxi2[i][1] += element.bezierWeights[a]*bp[a][i]*((d2Bdxi2[a][1]/wb - dBdxi[a][1]*dwbdxi[1]/(wb*wb)) - (dwbdxi[1]*(dBdxi[a][1]/(wb*wb) - 2*dwbdxi[1]*B[a]/(wb*wb*wb)) + d2wbdxi2[1]*B[a]/(wb*wb)));
-				d2xdxi2[i][2] += element.bezierWeights[a]*bp[a][i]*((d2Bdxi2[a][2]/wb - dBdxi[a][2]*dwbdxi[2]/(wb*wb)) - (dwbdxi[2]*(dBdxi[a][2]/(wb*wb) - 2*dwbdxi[2]*B[a]/(wb*wb*wb)) + d2wbdxi2[2]*B[a]/(wb*wb)));
+				d2xdxi2[i][1] += element.bezierWeights[a]*bp[a][i]*((d2Bdxi2[a][1]/wb - dBdxi[a][0]*dwbdxi[1]/(wb*wb)) - (dwbdxi[0]*(dBdxi[a][1]/(wb*wb) - 2*dwbdxi[1]*B[a]/(wb*wb*wb)) + d2wbdxi2[1]*B[a]/(wb*wb)));
+				d2xdxi2[i][2] += element.bezierWeights[a]*bp[a][i]*((d2Bdxi2[a][2]/wb - dBdxi[a][1]*dwbdxi[1]/(wb*wb)) - (dwbdxi[1]*(dBdxi[a][1]/(wb*wb) - 2*dwbdxi[1]*B[a]/(wb*wb*wb)) + d2wbdxi2[2]*B[a]/(wb*wb)));
 			}
 		}
 	}
@@ -1153,25 +1197,27 @@ void ShapeFunction(ASG_Element element, double** basis, double* R, double** dRdx
 		A[7] = 2*dxdxi[0][1]*dxdxi[1][1];
 		A[8] = dxdxi[1][1]*dxdxi[1][1];
 
-		double b[3];
-		double LHS[3];
+		double b[3*n_loc];
+		double LHS[3*n_loc];
+
+		for (int i=0; i<n_loc; i++) {
+			b[i*3] = dRdx[i][0]*d2xdxi2[0][0] + dRdx[i][1]*d2xdxi2[1][0];
+			b[i*3+1] = dRdx[i][0]*d2xdxi2[0][1] + dRdx[i][1]*d2xdxi2[1][1];
+			b[i*3+2] = dRdx[i][0]*d2xdxi2[0][2] + dRdx[i][1]*d2xdxi2[1][2];
+
+			LHS[i*3] = d2Rdxi2[i][0] - b[i*3];
+			LHS[i*3+1] = d2Rdxi2[i][1] - b[i*3+1];
+			LHS[i*3+2] = d2Rdxi2[i][2] - b[i*3+2];
+		}
+
 		int ipiv[3];
 
-		//TODO This could be made more efficient by taking the solve outside the loop?
+		LAPACKE_dgetrf(LAPACK_ROW_MAJOR,3,3,A,3,ipiv);
+		LAPACKE_dgesv(LAPACK_ROW_MAJOR,3,n_loc,A,3,ipiv,LHS,n_loc);
+
 		for (int i=0; i<n_loc; i++) {
-			b[0] = dRdx[i][0]*d2xdxi2[0][0] + dRdx[i][1]*d2xdxi2[1][0];
-			b[1] = dRdx[i][0]*d2xdxi2[0][1] + dRdx[i][1]*d2xdxi2[1][1];
-			b[2] = dRdx[i][0]*d2xdxi2[0][2] + dRdx[i][1]*d2xdxi2[1][2];
-
-			LHS[0] = d2Rdxi2[i][0] - b[0];
-			LHS[1] = d2Rdxi2[i][1] - b[1];
-			LHS[2] = d2Rdxi2[i][2] - b[2];
-
-			LAPACKE_dgetrf(LAPACK_ROW_MAJOR,3,3,A,3,ipiv);
-			LAPACKE_dgesv(LAPACK_ROW_MAJOR,3,1,A,3,ipiv,LHS,1);
-
 			for (int j=0; j<3; j++)
-				d2Rdx2[i][j] = LHS[j];
+				d2Rdx2[i][j] = LHS[i*3+j];
 		}
 	}
 
@@ -1279,7 +1325,7 @@ void Element_Formation(ASG_Element element, BC_Struct elementBC, Prob_Params pro
 	double** boundaryBasis;
 	boundaryBasis = new double* [n_loc];
 	for (int j=0; j<n_loc; j++)
-		boundaryBasis[j] = new double [1];
+		boundaryBasis[j] = new double [3];
 
 	double** boundaryBasisFine;
 	boundaryBasisFine = new double* [n_locf];
@@ -1506,8 +1552,8 @@ void Element_Formation(ASG_Element element, BC_Struct elementBC, Prob_Params pro
 	// Calculate k_e and f_e
 
 	double temp[n_loc*n_locf];
-	cblas_dgemm(CblasRowMajor,CblasNoTrans,CblasNoTrans,n_loc,n_locf,n_locf,1.0,k_cf,n_locf,k_ff,n_locf,0.0,temp,n_locf);
 
+	cblas_dgemm(CblasRowMajor,CblasNoTrans,CblasNoTrans,n_loc,n_locf,n_locf,1.0,k_cf,n_locf,k_ff,n_locf,0.0,temp,n_locf);
 	cblas_dgemm(CblasRowMajor,CblasNoTrans,CblasNoTrans,n_loc,n_loc,n_locf,-1.0,temp,n_locf,k_fc,n_loc,1.0,k_cc,n_loc);
 
 	for (int i=0; i<n_loc*n_loc; i++)
@@ -1622,7 +1668,7 @@ void Solve_Fine_Scales(ASG_Element element, BC_Struct elementBC, Prob_Params pro
 	double** boundaryBasis;
 	boundaryBasis = new double* [n_loc];
 	for (int j=0; j<n_loc; j++)
-		boundaryBasis[j] = new double [1];
+		boundaryBasis[j] = new double [3];
 
 	double** boundaryBasisFine;
 	boundaryBasisFine = new double* [n_locf];
@@ -1911,11 +1957,6 @@ void Extract_Concentration(ASG_Element* mesh, double*** fullBasis, int numElems,
 		}
 	}
 
-	cout << "yo 1889" << endl;
-	for (int i=0; i<numPlotPts*numPlotPts*numElems; i++)
-		cout << X[i] << " " << Y[i] << " 0" << endl;
-	cout << endl;
-
 	// Free variables
 	for (int j=0; j<nloc; j++)
 		delete [] basis[j];
@@ -1963,19 +2004,18 @@ void Extract_Fine_Scales(double*** fullBasisFine, int numElems, int numPlotPts, 
 	return;
 }
 
-void Subelement_Connectivity(int* subConnectivity, int p) {
+void Subelement_Connectivity(int* subConnectivity, int numPlotPts, int numSubElems) {
 
 	// TODO: Adjust this to incorporate subdivision of subelements
-	int numSubElems = p*p;
 	int e;
 
-	for (int i=0; i<p; i++) {
-		for (int j=0; j<p; j++) {
-			e = i*p+j;
-			subConnectivity[e] = i*(p+1)+j;
-			subConnectivity[e+numSubElems] = i*(p+1)+j+1;
-			subConnectivity[e+2*numSubElems] = i*(p+1)+j+(p+1);
-			subConnectivity[e+3*numSubElems] = i*(p+1)+j+(p+1)+1;
+	for (int i=0; i<(numPlotPts-1); i++) {
+		for (int j=0; j<(numPlotPts-1); j++) {
+			e = i*(numPlotPts-1)+j;
+			subConnectivity[e] = i*numPlotPts+j;
+			subConnectivity[e+numSubElems] = i*numPlotPts+j+1;
+			subConnectivity[e+2*numSubElems] = i*numPlotPts+j+numPlotPts;
+			subConnectivity[e+3*numSubElems] = i*numPlotPts+j+numPlotPts+1;
 		}
 	}
 
@@ -2020,7 +2060,7 @@ void Write_VTK_File(double* X, double* Y, double* U, double* U_f, int numElems, 
 		for (int j=0; j<numSubElems; j++) {
 			outStream << 4;
 			for (int k=0; k<4; k++)
-				outStream << " " << i*numPlotPts*numPlotPts+subConnectivity[j*4+k];
+				outStream << " " << i*numPlotPts*numPlotPts+subConnectivity[j+k*numSubElems];
 			outStream << "\n";
 		}
 	}
